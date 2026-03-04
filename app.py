@@ -12,6 +12,7 @@ from agents.sentinel import sentinel_agent
 from memory import SecurityMemory
 from risk_engine import calculate_risk, generate_risk_insight
 from storage import upload_report_to_blob, load_reports_from_blob
+from repo_scanner import scan_github_repo
 
 # ---------------- CONFIG ---------------- #
 
@@ -44,13 +45,47 @@ st.markdown("## 🍯 HoneySentinel")
 st.caption("Multi-Agent AI Security Intelligence Platform")
 st.markdown("---")
 
-# ---------------- UPLOAD SECTION ---------------- #
+# ---------------- INPUT OPTIONS ---------------- #
+
+st.markdown("### Analyze GitHub Repository")
+
+repo_url = st.text_input("Enter GitHub Repository URL")
+
+repo_code = None
+file_name = None
+
+if repo_url and st.button("Clone & Analyze Repo"):
+
+    with st.spinner("Cloning repository and extracting Python files..."):
+
+        try:
+            repo_code = scan_github_repo(repo_url)
+            file_name = "github_repo"
+            st.success("Repository cloned successfully!")
+
+        except Exception as e:
+            st.error(f"Failed to process repository: {e}")
+
+st.markdown("---")
 
 uploaded_file = st.file_uploader("Upload Python File", type=["py"])
 
+# ---------------- CODE SELECTION ---------------- #
+
+code_content = None
+
 if uploaded_file:
     code_content = uploaded_file.read().decode("utf-8")
+    file_name = uploaded_file.name
     st.code(code_content, language="python")
+
+elif repo_code:
+    code_content = repo_code
+    st.info("Repository code extracted successfully.")
+
+# ---------------- ANALYSIS ---------------- #
+
+if code_content:
 
     if st.button("🔍 Analyze Now"):
 
@@ -88,10 +123,9 @@ if uploaded_file:
 
         status.success("✅ Analysis Completed")
 
-        # Store current scan
         current_scan = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "file_name": uploaded_file.name,
+            "file_name": file_name,
             "risk_score": risk_data["risk_score"],
             "risk_level": risk_data["risk_level"],
             "data": {
@@ -103,14 +137,14 @@ if uploaded_file:
             }
         }
 
-        blob_filename = f"{uploaded_file.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        blob_filename = f"{file_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
         upload_report_to_blob(current_scan, blob_filename)
 
         st.session_state.analysis_data = current_scan["data"]
         st.session_state.scan_history.append(current_scan)
 
-# ---------------- RESULTS SECTION ---------------- #
+# ---------------- RESULTS ---------------- #
 
 st.markdown("---")
 
@@ -123,14 +157,16 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 with tab1:
 
     if not st.session_state.analysis_data:
-        st.info("No scan available. Upload a file to begin analysis.")
+        st.info("No scan available. Upload a file or analyze a repository.")
     else:
+
         data = st.session_state.analysis_data
         risk_data = data["risk_data"]
         guardian_output = data["guardian_output"]
         vulns = guardian_output.get("validated_vulnerabilities", [])
 
         col1, col2, col3 = st.columns(3)
+
         col1.metric("Risk Score", f"{risk_data['risk_score']} / 100")
         col2.metric("Risk Level", risk_data["risk_level"])
         col3.metric("Confidence", f"{risk_data['confidence']}%")
@@ -144,17 +180,21 @@ with tab1:
             if severity in severity_counts:
                 severity_counts[severity] += 1
 
-        fig, ax = plt.subplots(figsize=(4, 2))
+        fig, ax = plt.subplots(figsize=(4,2))
+
         ax.bar(severity_counts.keys(), severity_counts.values())
+
         ax.set_xlabel("")
         ax.set_ylabel("")
         ax.set_title("")
         ax.tick_params(axis='both', which='both', length=0)
+
         plt.tight_layout()
 
         st.pyplot(fig, width="content")
 
         st.markdown("### 🧠 Executive Insight")
+
         st.write(data["insight"])
 
 # ---------------- VULNERABILITIES ---------------- #
@@ -164,6 +204,7 @@ with tab2:
     if not st.session_state.analysis_data:
         st.info("No vulnerabilities to display yet.")
     else:
+
         vulns = st.session_state.analysis_data["guardian_output"].get(
             "validated_vulnerabilities", []
         )
@@ -171,8 +212,11 @@ with tab2:
         if not vulns:
             st.success("No validated vulnerabilities found.")
         else:
+
             for v in vulns:
+
                 with st.expander(f"{v['type']} ({v['severity']})"):
+
                     st.write(v["reason"])
 
 # ---------------- REPORT ---------------- #
@@ -182,6 +226,7 @@ with tab3:
     if not st.session_state.analysis_data:
         st.info("No report generated yet.")
     else:
+
         st.write(st.session_state.analysis_data["final_report"])
 
 # ---------------- TRACE ---------------- #
@@ -191,6 +236,7 @@ with tab4:
     if not st.session_state.analysis_data:
         st.info("No execution trace available yet.")
     else:
+
         st.json(st.session_state.analysis_data["trace"])
 
 # ---------------- HISTORY ---------------- #
@@ -198,11 +244,29 @@ with tab4:
 with tab5:
 
     if not st.session_state.scan_history:
-        st.info("No previous scans available.")
-    else:
-        for idx, scan in enumerate(reversed(st.session_state.scan_history)):
 
-            col1, col2, col3, col4 = st.columns([3, 1, 1, 2])
+        st.info("No previous scans available.")
+
+    else:
+
+        sorted_history = sorted(
+            st.session_state.scan_history,
+            key=lambda x: datetime.strptime(x["timestamp"], "%Y-%m-%d %H:%M:%S"),
+            reverse=True
+        )
+
+        header1, header2, header3, header4 = st.columns([3,1,1,2])
+
+        header1.markdown("**File**")
+        header2.markdown("**Score**")
+        header3.markdown("**Risk**")
+        header4.markdown("**Timestamp**")
+
+        st.markdown("---")
+
+        for idx, scan in enumerate(sorted_history):
+
+            col1, col2, col3, col4 = st.columns([3,1,1,2])
 
             col1.write(f"**{scan['file_name']}**")
             col2.write(scan["risk_score"])
@@ -210,30 +274,33 @@ with tab5:
             col4.write(scan["timestamp"])
 
             if st.button("View", key=f"view_{idx}"):
+
                 st.session_state.analysis_data = scan["data"]
                 st.rerun()
 
             st.markdown("---")
 
-# ---------------- SECURITY & PRIVACY ---------------- #
+# ---------------- SECURITY ---------------- #
 
 with tab6:
 
     st.markdown("## 🔒 Security & Privacy Architecture")
 
     st.markdown("""
-    **Data Handling Model**
-    - Code is processed in-memory during analysis.
-    - No permanent storage unless persistence is enabled.
-    - Scan history is session-based by default.
-    """)
+**Data Handling Model**
+
+- Code is processed in-memory during analysis  
+- Scan reports stored securely in Azure Blob Storage  
+- Private container prevents public access  
+""")
 
     st.markdown("""
-    **Azure Enterprise Security**
-    - Powered by Azure OpenAI Service.
-    - No training on customer data.
-    - Encrypted HTTPS communication.
-    - Designed for private Azure VNet deployment.
-    """)
+**Azure Enterprise Security**
+
+- Powered by Azure OpenAI Service  
+- No training on customer data  
+- Encrypted HTTPS communication  
+- Secure cloud storage via Azure Blob  
+""")
 
     st.success("HoneySentinel follows enterprise security-first principles.")
