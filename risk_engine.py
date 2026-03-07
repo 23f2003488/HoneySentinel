@@ -1,6 +1,7 @@
 def calculate_risk(guardian_data):
     """
     Calculate overall risk score based on validated vulnerabilities.
+    Avoids risk dilution by using a max-severity baseline.
     """
 
     severity_weights = {
@@ -12,37 +13,40 @@ def calculate_risk(guardian_data):
 
     vulnerabilities = guardian_data.get("validated_vulnerabilities", [])
 
-    total_score = 0
-    max_possible = len(vulnerabilities) * 10
-
-    for vuln in vulnerabilities:
-        severity = vuln.get("severity", "Low")
-        total_score += severity_weights.get(severity, 2)
-
-    if max_possible == 0:
+    if not vulnerabilities:
         return {
             "risk_score": 0,
             "risk_level": "Secure",
             "confidence": 100
         }
 
-    normalized_score = int((total_score / max_possible) * 100)
+    # 1. Find the highest single vulnerability score to set the baseline
+    max_severity_val = max(severity_weights.get(v.get("severity", "Low"), 2) for v in vulnerabilities)
+    
+    # 2. Calculate a baseline score out of 100 based strictly on the highest severity
+    base_score = max_severity_val * 10 
+    
+    # 3. Add a small penalty (e.g., 2 points) for every additional vulnerability
+    additional_penalty = (len(vulnerabilities) - 1) * 2
+    
+    # 4. Cap the final score at 100
+    final_score = min(100, base_score + additional_penalty)
 
-    # Determine risk level
-    if normalized_score < 25:
+    # Determine risk level based on the newly calculated score
+    if final_score < 30:
         risk_level = "Low"
-    elif normalized_score < 50:
+    elif final_score < 60:
         risk_level = "Medium"
-    elif normalized_score < 75:
+    elif final_score < 85:
         risk_level = "High"
     else:
         risk_level = "Critical"
 
-    # Simple confidence model
-    confidence = min(95, 60 + (len(vulnerabilities) * 5))
+    # Simple confidence model (starts at 70%, increases with more data)
+    confidence = min(95, 70 + (len(vulnerabilities) * 5))
 
     return {
-        "risk_score": normalized_score,
+        "risk_score": final_score,
         "risk_level": risk_level,
         "confidence": confidence
     }

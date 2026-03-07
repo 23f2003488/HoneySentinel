@@ -1,4 +1,5 @@
 import os
+import json
 import streamlit as st
 from openai import AzureOpenAI
 from dotenv import load_dotenv
@@ -33,11 +34,136 @@ deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT")
 if "analysis_data" not in st.session_state:
     st.session_state.analysis_data = None
 
+if "repo_code" not in st.session_state:
+    st.session_state.repo_code = None
+
+if "repo_name" not in st.session_state:
+    st.session_state.repo_name = None
+
 if "scan_history" not in st.session_state:
     try:
         st.session_state.scan_history = load_reports_from_blob()
     except:
         st.session_state.scan_history = []
+
+# ---------------- ANALYSIS FUNCTION ---------------- #
+
+def run_analysis(code_content, file_name):
+
+    memory = SecurityMemory()
+    status = st.empty()
+
+    # ---------------- SCOUT & HUNTER PIPELINE ---------------- #
+    vulnerabilities = []
+
+    if isinstance(code_content, dict):
+        total_files = len(code_content)
+        progress = st.progress(0)
+
+        for idx, (fname, code) in enumerate(code_content.items()):
+            
+            # 1. Scout parses the raw code
+            status.info(f"🛰 Scout Agent analyzing structure of {fname}...")
+            scout_output = scout_agent(client, deployment_name, code)
+            memory.log("Scout", f"Structure analysis completed for {fname}")
+
+            # 2. Hunter uses Scout's structured JSON
+            status.info(f"🎯 Hunter Agent detecting vulnerabilities in {fname}...")
+            hunter_output = hunter_agent(client, deployment_name, scout_output)
+
+            if hunter_output and isinstance(hunter_output, dict) and "vulnerabilities" in hunter_output:
+                for v in hunter_output["vulnerabilities"]:
+                    v["file"] = fname
+                    vulnerabilities.append(v)
+
+            progress.progress((idx + 1) / total_files)
+
+    else:
+        # Single file flow
+        status.info("🛰 Scout Agent analyzing structure...")
+        scout_output = scout_agent(client, deployment_name, code_content)
+        memory.log("Scout", "Structure analysis completed")
+
+        status.info("🎯 Hunter Agent detecting vulnerabilities...")
+        hunter_output = hunter_agent(client, deployment_name, scout_output)
+
+        if hunter_output and isinstance(hunter_output, dict):
+            vulnerabilities = hunter_output.get("vulnerabilities", [])
+            for v in vulnerabilities:
+                v["file"] = file_name
+        
+    memory.log("Hunter", "Vulnerability detection completed")
+    hunter_result = {"vulnerabilities": vulnerabilities}
+
+    # ---------------- GUARDIAN ---------------- #
+
+    status.info("🛡 Guardian Agent validating findings...")
+
+    # Fixed: Passing dictionary directly to avoid double JSON encoding
+    guardian_output = guardian_agent(
+        client,
+        deployment_name,
+        hunter_result
+    )
+
+    validated = guardian_output.get("validated_vulnerabilities", [])
+
+    # Fixed: Matching vulnerabilities by type to preserve file names
+    for v in validated:
+        original = next((orig for orig in vulnerabilities if orig.get("type") == v.get("type")), None)
+        if original and "file" in original:
+            v["file"] = original["file"]
+
+    memory.log("Guardian", "Validation completed")
+
+    # ---------------- RISK ENGINE ---------------- #
+
+    risk_data = calculate_risk(guardian_output)
+
+    memory.log("RiskEngine", "Risk score calculated")
+
+    # ---------------- SENTINEL ---------------- #
+
+    status.info("📄 Sentinel Agent generating report...")
+
+    final_report = sentinel_agent(client, deployment_name, guardian_output)
+
+    memory.log("Sentinel", "Final report generated")
+
+    insight = generate_risk_insight(
+        client,
+        deployment_name,
+        risk_data,
+        guardian_output
+    )
+
+    status.success("✅ Analysis Completed")
+
+    # ---------------- SAVE RESULT ---------------- #
+
+    current_scan = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "file_name": file_name,
+        "risk_score": risk_data["risk_score"],
+        "risk_level": risk_data["risk_level"],
+        "data": {
+            "guardian_output": guardian_output,
+            "risk_data": risk_data,
+            "final_report": final_report,
+            "insight": insight,
+            "trace": memory.get_trace()
+        }
+    }
+
+    blob_filename = f"{file_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+    try:
+        upload_report_to_blob(current_scan, blob_filename)
+    except Exception as e:
+        st.warning(f"Could not upload to blob storage: {e}")
+
+    st.session_state.analysis_data = current_scan["data"]
+    st.session_state.scan_history.append(current_scan)
 
 # ---------------- HEADER ---------------- #
 
@@ -45,104 +171,45 @@ st.markdown("## 🍯 HoneySentinel")
 st.caption("Multi-Agent AI Security Intelligence Platform")
 st.markdown("---")
 
-# ---------------- INPUT OPTIONS ---------------- #
+# ---------------- REPO INPUT ---------------- #
 
 st.markdown("### Analyze GitHub Repository")
 
 repo_url = st.text_input("Enter GitHub Repository URL")
-
-repo_code = None
-file_name = None
 
 if repo_url and st.button("Clone & Analyze Repo"):
 
     with st.spinner("Cloning repository and extracting Python files..."):
 
         try:
-            repo_code = scan_github_repo(repo_url)
-            file_name = "github_repo"
+
+            repo_files = scan_github_repo(repo_url)
+            repo_name = repo_url.rstrip("/").split("/")[-1]
+
+            st.session_state.repo_code = repo_files
+            st.session_state.repo_name = repo_name
+
             st.success("Repository cloned successfully!")
+            run_analysis(repo_files, repo_name)
 
         except Exception as e:
             st.error(f"Failed to process repository: {e}")
 
 st.markdown("---")
 
+# ---------------- FILE INPUT ---------------- #
+
 uploaded_file = st.file_uploader("Upload Python File", type=["py"])
 
-# ---------------- CODE SELECTION ---------------- #
-
-code_content = None
-
 if uploaded_file:
+
     code_content = uploaded_file.read().decode("utf-8")
     file_name = uploaded_file.name
+
     st.code(code_content, language="python")
 
-elif repo_code:
-    code_content = repo_code
-    st.info("Repository code extracted successfully.")
-
-# ---------------- ANALYSIS ---------------- #
-
-if code_content:
-
     if st.button("🔍 Analyze Now"):
-
-        memory = SecurityMemory()
-        status = st.empty()
-
-        # SCOUT
-        status.info("🛰 Scout Agent analyzing structure...")
-        scout_output = scout_agent(client, deployment_name, code_content)
-        memory.log("Scout", "Structure analysis completed")
-
-        # HUNTER
-        status.info("🎯 Hunter Agent detecting vulnerabilities...")
-        hunter_output = hunter_agent(client, deployment_name, scout_output)
-        memory.log("Hunter", "Vulnerability detection completed")
-
-        # GUARDIAN
-        status.info("🛡 Guardian Agent validating findings...")
-        guardian_output = guardian_agent(client, deployment_name, hunter_output)
-        memory.log("Guardian", "Validation completed")
-
-        # RISK ENGINE
-        risk_data = calculate_risk(guardian_output)
-        memory.log("RiskEngine", "Risk score calculated")
-
-        # SENTINEL
-        status.info("📄 Sentinel Agent generating report...")
-        final_report = sentinel_agent(client, deployment_name, guardian_output)
-        memory.log("Sentinel", "Final report generated")
-
-        # EXECUTIVE INSIGHT
-        insight = generate_risk_insight(
-            client, deployment_name, risk_data, guardian_output
-        )
-
-        status.success("✅ Analysis Completed")
-
-        current_scan = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "file_name": file_name,
-            "risk_score": risk_data["risk_score"],
-            "risk_level": risk_data["risk_level"],
-            "data": {
-                "guardian_output": guardian_output,
-                "risk_data": risk_data,
-                "final_report": final_report,
-                "insight": insight,
-                "trace": memory.get_trace()
-            }
-        }
-
-        blob_filename = f"{file_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
-        upload_report_to_blob(current_scan, blob_filename)
-
-        st.session_state.analysis_data = current_scan["data"]
-        st.session_state.scan_history.append(current_scan)
+        run_analysis(code_content, file_name)
 
 # ---------------- RESULTS ---------------- #
 
@@ -181,14 +248,7 @@ with tab1:
                 severity_counts[severity] += 1
 
         fig, ax = plt.subplots(figsize=(4,2))
-
         ax.bar(severity_counts.keys(), severity_counts.values())
-
-        ax.set_xlabel("")
-        ax.set_ylabel("")
-        ax.set_title("")
-        ax.tick_params(axis='both', which='both', length=0)
-
         plt.tight_layout()
 
         st.pyplot(fig, width="content")
@@ -215,9 +275,13 @@ with tab2:
 
             for v in vulns:
 
-                with st.expander(f"{v['type']} ({v['severity']})"):
+                title = f"{v['type']} ({v['severity']})"
 
-                    st.write(v["reason"])
+                if "file" in v:
+                    title += f" — {v['file']}"
+
+                with st.expander(title):
+                    st.write(v.get("reason", "No reason provided."))
 
 # ---------------- REPORT ---------------- #
 
@@ -226,7 +290,6 @@ with tab3:
     if not st.session_state.analysis_data:
         st.info("No report generated yet.")
     else:
-
         st.write(st.session_state.analysis_data["final_report"])
 
 # ---------------- TRACE ---------------- #
@@ -236,7 +299,6 @@ with tab4:
     if not st.session_state.analysis_data:
         st.info("No execution trace available yet.")
     else:
-
         st.json(st.session_state.analysis_data["trace"])
 
 # ---------------- HISTORY ---------------- #
@@ -244,11 +306,9 @@ with tab4:
 with tab5:
 
     if not st.session_state.scan_history:
-
         st.info("No previous scans available.")
 
     else:
-
         sorted_history = sorted(
             st.session_state.scan_history,
             key=lambda x: datetime.strptime(x["timestamp"], "%Y-%m-%d %H:%M:%S"),
@@ -274,7 +334,6 @@ with tab5:
             col4.write(scan["timestamp"])
 
             if st.button("View", key=f"view_{idx}"):
-
                 st.session_state.analysis_data = scan["data"]
                 st.rerun()
 
@@ -289,18 +348,17 @@ with tab6:
     st.markdown("""
 **Data Handling Model**
 
-- Code is processed in-memory during analysis  
-- Scan reports stored securely in Azure Blob Storage  
-- Private container prevents public access  
+- Code processed in-memory
+- Reports stored securely in Azure Blob Storage
+- Private container access
 """)
 
     st.markdown("""
-**Azure Enterprise Security**
+**Azure Security**
 
-- Powered by Azure OpenAI Service  
-- No training on customer data  
-- Encrypted HTTPS communication  
-- Secure cloud storage via Azure Blob  
+- Azure OpenAI Service
+- Encrypted HTTPS
+- No model training on customer data
 """)
 
     st.success("HoneySentinel follows enterprise security-first principles.")

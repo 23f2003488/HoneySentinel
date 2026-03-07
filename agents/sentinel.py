@@ -5,13 +5,27 @@ def sentinel_agent(client, deployment_name, guardian_data):
     guardian_json = json.dumps(guardian_data, indent=2)
 
     prompt = f"""
-You are Sentinel Agent.
+    You are Sentinel Agent, an expert cybersecurity analyst.
 
-Generate a professional vulnerability report in clean readable format.
+    Based on the Guardian Validated Data below, generate a professional vulnerability report.
+    You MUST format your response using the following strictly structured Markdown template:
 
-Guardian Validated Data:
-{guardian_json}
-"""
+    ## 🛡️ Executive Summary
+    [Write a 2-3 sentence overview of the security posture]
+
+    ## 🚨 Validated Vulnerabilities
+    [For each vulnerability, use this format:]
+    ### 1. [Vulnerability Type]
+    * **Severity:** [Severity Level]
+    * **Reason:** [Detailed explanation of the risk]
+    * **Location:** `[File Name]` (if provided)
+
+    ## 💡 Recommended Remediation
+    [Provide 2-3 actionable steps to secure the code]
+
+    Guardian Validated Data:
+    {guardian_json}
+    """
 
     response = client.chat.completions.create(
         model=deployment_name,

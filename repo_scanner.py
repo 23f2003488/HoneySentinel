@@ -1,29 +1,27 @@
-import os
-import shutil
 import tempfile
+import os
 from git import Repo
-
 
 def scan_github_repo(repo_url):
 
     temp_dir = tempfile.mkdtemp()
 
-    try:
-        Repo.clone_from(repo_url, temp_dir)
+    Repo.clone_from(repo_url, temp_dir)
 
-        python_files = []
+    python_files = {}
 
-        for root, dirs, files in os.walk(temp_dir):
-            for file in files:
-                if file.endswith(".py"):
-                    path = os.path.join(root, file)
+    for root, dirs, files in os.walk(temp_dir):
 
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        python_files.append(f.read())
+        for file in files:
 
-        combined_code = "\n\n".join(python_files)
+            if file.endswith(".py"):
 
-        return combined_code
+                file_path = os.path.join(root, file)
 
-    finally:
-        shutil.rmtree(temp_dir)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        python_files[file] = f.read()
+                except:
+                    pass
+
+    return python_files
