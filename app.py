@@ -96,25 +96,16 @@ def run_analysis(code_content, file_name):
     hunter_result = {"vulnerabilities": vulnerabilities}
 
     # ---------------- GUARDIAN ---------------- #
-
     status.info("🛡 Guardian Agent validating findings...")
 
-    # Fixed: Passing dictionary directly to avoid double JSON encoding
     guardian_output = guardian_agent(
         client,
         deployment_name,
-        hunter_result
+        hunter_result # Make sure this is passed as the raw dict, not json.dumps()
     )
 
     validated = guardian_output.get("validated_vulnerabilities", [])
-
-    # Fixed: Matching vulnerabilities by type to preserve file names
-    for v in validated:
-        original = next((orig for orig in vulnerabilities if orig.get("type") == v.get("type")), None)
-        if original and "file" in original:
-            v["file"] = original["file"]
-
-    memory.log("Guardian", "Validation completed")
+    memory.log("Guardian", f"Validation completed. {len(validated)} vulnerabilities confirmed.")
 
     # ---------------- RISK ENGINE ---------------- #
 
@@ -209,6 +200,9 @@ if uploaded_file:
     st.code(code_content, language="python")
 
     if st.button("🔍 Analyze Now"):
+        # Clear old repository data from memory
+        st.session_state.repo_code = None
+        st.session_state.repo_name = None
         run_analysis(code_content, file_name)
 
 # ---------------- RESULTS ---------------- #
@@ -256,6 +250,42 @@ with tab1:
         st.markdown("### 🧠 Executive Insight")
 
         st.write(data["insight"])
+
+        
+       # ---------------- FILE RISK MAP ---------------- #
+
+        st.markdown("### 📂 Security Map")
+
+        file_risk = {}
+
+        # First mark all repo files as SAFE
+        if st.session_state.repo_code and isinstance(st.session_state.repo_code, dict):
+            for f in st.session_state.repo_code.keys():
+                file_risk[f] = "🟢 Safe"
+
+        # Apply vulnerabilities
+        for v in vulns:
+
+            file = v.get("file")
+            severity = v.get("severity", "Low")
+
+            if not file:
+                continue
+
+            if severity == "Critical":
+                file_risk[file] = "🔴 Critical"
+
+            elif severity == "High":
+                if file_risk.get(file) != "🔴 Critical":
+                    file_risk[file] = "🟠 High"
+
+            elif severity == "Medium":
+                if file_risk.get(file) not in ["🔴 Critical", "🟠 High"]:
+                    file_risk[file] = "🟡 Medium"
+
+        # Display map
+        for file, risk in sorted(file_risk.items()):
+            st.write(f"**{file}** — {risk}")
 
 # ---------------- VULNERABILITIES ---------------- #
 

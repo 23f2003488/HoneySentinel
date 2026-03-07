@@ -33,11 +33,22 @@ Scout Data:
         ]
     )
 
-    raw_output = response.choices[0].message.content
+    raw_output = response.choices[0].message.content.strip()
+
+    # Aggressively strip markdown artifacts
+    if raw_output.startswith("```json"):
+        raw_output = raw_output[7:]
+    elif raw_output.startswith("```"):
+        raw_output = raw_output[3:]
+        
+    if raw_output.endswith("```"):
+        raw_output = raw_output[:-3]
+
+    raw_output = raw_output.strip()
 
     try:
         structured_output = json.loads(raw_output)
-    except:
-        structured_output = {"error": "Invalid JSON", "raw": raw_output}
+    except Exception as e:
+        structured_output = {"error": f"Invalid JSON: {str(e)}", "raw": raw_output}
 
     return structured_output
