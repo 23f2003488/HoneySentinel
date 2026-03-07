@@ -1,0 +1,8 @@
+streamlit
+openai
+python-dotenv
+matplotlib
+gitpython
+azure-storage-blob
+requests
+tqdm

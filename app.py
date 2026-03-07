@@ -10,10 +10,10 @@ from agents.scout import scout_agent
 from agents.hunter import hunter_agent
 from agents.guardian import guardian_agent
 from agents.sentinel import sentinel_agent
-from memory import SecurityMemory
-from risk_engine import calculate_risk, generate_risk_insight
-from storage import upload_report_to_blob, load_reports_from_blob
-from repo_scanner import scan_github_repo
+from core.memory import SecurityMemory
+from core.risk_engine import calculate_risk, generate_risk_insight
+from storage.storage import upload_report_to_blob, load_reports_from_blob
+from core.repo_scanner import scan_github_repo
 
 # ---------------- CONFIG ---------------- #
 
