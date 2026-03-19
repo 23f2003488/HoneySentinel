@@ -6,3 +6,4 @@ gitpython
 azure-storage-blob
 requests
 tqdm
+plotly
